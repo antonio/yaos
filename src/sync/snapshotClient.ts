@@ -71,12 +71,7 @@ export interface SnapshotDiff {
  */
 function baseUrl(settings: VaultSyncSettings): string {
 	const host = settings.host.replace(/\/$/, "");
-	const roomId = `v1:${settings.vaultId}`;
-	// PartyKit HTTP endpoint format: host/parties/main/<roomId>
-	// IMPORTANT: do not URL-encode roomId here. The websocket provider uses
-	// the raw room id (v1:<vaultId>), and encoding would route HTTP endpoints
-	// to a different DO room (v1%3A...) than the live Yjs websocket room.
-	return `${host}/parties/main/${roomId}`;
+	return `${host}/vault/${encodeURIComponent(settings.vaultId)}`;
 }
 
 async function serverPost(
@@ -138,7 +133,7 @@ export async function requestDailySnapshot(
 	device?: string,
 	trace?: TraceHttpContext,
 ): Promise<SnapshotResult> {
-	return await serverPost(settings, "snapshot/maybe", { device }, trace) as SnapshotResult;
+	return await serverPost(settings, "snapshots/maybe", { device }, trace) as SnapshotResult;
 }
 
 /**
@@ -149,7 +144,7 @@ export async function requestSnapshotNow(
 	device?: string,
 	trace?: TraceHttpContext,
 ): Promise<SnapshotResult> {
-	return await serverPost(settings, "snapshot/now", { device }, trace) as SnapshotResult;
+	return await serverPost(settings, "snapshots", { device }, trace) as SnapshotResult;
 }
 
 // -------------------------------------------------------------------
@@ -163,7 +158,7 @@ export async function listSnapshots(
 	settings: VaultSyncSettings,
 	trace?: TraceHttpContext,
 ): Promise<SnapshotIndex[]> {
-	const result = await serverGet(settings, "snapshot/list", trace) as { snapshots: SnapshotIndex[] };
+	const result = await serverGet(settings, "snapshots", trace) as { snapshots: SnapshotIndex[] };
 	return result.snapshots ?? [];
 }
 
@@ -180,14 +175,16 @@ export async function downloadSnapshot(
 	snapshot: SnapshotIndex,
 	trace?: TraceHttpContext,
 ): Promise<Y.Doc> {
-	// Get presigned URL for the crdt.bin.gz
-	const presignResult = await serverPost(settings, "snapshot/presign-get", {
-		snapshotId: snapshot.snapshotId,
-		day: snapshot.day,
-	}, trace) as { url: string; expiresIn: number };
-
-	// Download the gzipped CRDT data
-	const res = await fetch(presignResult.url);
+	const url = appendTraceParams(
+		`${baseUrl(settings)}/snapshots/${encodeURIComponent(snapshot.snapshotId)}`,
+		trace,
+	);
+	const res = await fetch(url, {
+		method: "GET",
+		headers: {
+			Authorization: `Bearer ${settings.token}`,
+		},
+	});
 	if (!res.ok) {
 		throw new Error(`Snapshot download failed (${res.status})`);
 	}

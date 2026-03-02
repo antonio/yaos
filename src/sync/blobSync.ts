@@ -3,15 +3,15 @@
  * via content-addressed R2 blob storage.
  *
  * Architecture:
- *   - Client hashes file bytes (SHA-256) and requests presigned URLs from server
- *   - Uploads/downloads go directly to R2 (no bytes through the DO)
+ *   - Client hashes file bytes (SHA-256) and talks to the Worker directly
+ *   - The Worker proxies bytes to native R2 bindings (no presigned URLs)
  *   - CRDT maps (pathToBlob, blobMeta, blobTombstones) track which blobs belong where
  *   - Two-phase commit: CRDT is only updated AFTER successful upload
  *   - Content-addressing provides automatic dedup across the vault
  *
  * Flow:
- *   Upload: detect change → hash → check exists → presign PUT → upload → set CRDT
- *   Download: CRDT observer fires → check disk → presign GET → download → write disk
+ *   Upload: detect change → hash → check exists → PUT to Worker → set CRDT
+ *   Download: CRDT observer fires → check disk → GET from Worker → write disk
  */
 import { type App, TFile, normalizePath, requestUrl, arrayBufferToHex } from "obsidian";
 import type { VaultSync } from "./vaultSync";
@@ -39,40 +39,27 @@ const RETRY_BASE_MS = 1000;
 const SUPPRESS_MS = 1000;
 
 // -------------------------------------------------------------------
-// Presign HTTP client
+// Blob HTTP client
 // -------------------------------------------------------------------
-
-interface PresignPutResult {
-	url: string;
-	expiresIn: number;
-}
-
-interface PresignGetResult {
-	url: string;
-	expiresIn: number;
-}
 
 interface ExistsResult {
 	present: string[];
 }
 
-class BlobPresignClient {
+class BlobHttpClient {
 	constructor(
 		private host: string,
 		private token: string,
-		private roomId: string,
+		private vaultId: string,
 		private trace?: TraceHttpContext,
 	) {}
 
 	/**
-	 * Build the HTTP URL for a blob endpoint on the PartyKit room.
-	 * PartyKit exposes rooms at: /parties/main/<roomId>
+	 * Build the HTTP URL for a blob endpoint on the Worker.
 	 */
 	private url(endpoint: string): string {
-		// Do not URL-encode roomId here: websocket sync uses raw room IDs,
-		// and encoding would route HTTP requests to a different DO room.
 		return appendTraceParams(
-			`${this.host}/parties/main/${this.roomId}${endpoint}`,
+			`${this.host}/vault/${encodeURIComponent(this.vaultId)}/blobs${endpoint}`,
 			this.trace,
 		);
 	}
@@ -83,41 +70,38 @@ class BlobPresignClient {
 		};
 	}
 
-	async presignPut(
+	async upload(
 		hash: string,
 		contentType: string,
-		contentLength: number,
-	): Promise<PresignPutResult> {
+		data: ArrayBuffer,
+	): Promise<void> {
 		const res = await requestUrl({
-			url: this.url("/blob/presign-put"),
-			method: "POST",
-			contentType: "application/json",
+			url: this.url(`/${hash}`),
+			method: "PUT",
 			headers: this.authHeaders(),
-			body: JSON.stringify({ hash, contentType, contentLength }),
+			body: data,
+			contentType,
 		});
-		if (res.status !== 200) {
-			throw new Error(`presign-put failed: ${res.status} ${res.text}`);
+		if (res.status !== 204) {
+			throw new Error(`blob upload failed: ${res.status} ${res.text}`);
 		}
-		return res.json as PresignPutResult;
 	}
 
-	async presignGet(hash: string): Promise<PresignGetResult> {
+	async download(hash: string): Promise<ArrayBuffer> {
 		const res = await requestUrl({
-			url: this.url("/blob/presign-get"),
-			method: "POST",
-			contentType: "application/json",
+			url: this.url(`/${hash}`),
+			method: "GET",
 			headers: this.authHeaders(),
-			body: JSON.stringify({ hash }),
 		});
 		if (res.status !== 200) {
-			throw new Error(`presign-get failed: ${res.status} ${res.text}`);
+			throw new Error(`blob download failed: ${res.status} ${res.text}`);
 		}
-		return res.json as PresignGetResult;
+		return res.arrayBuffer;
 	}
 
 	async exists(hashes: string[]): Promise<string[]> {
 		const res = await requestUrl({
-			url: this.url("/blob/exists"),
+			url: this.url("/exists"),
 			method: "POST",
 			contentType: "application/json",
 			headers: this.authHeaders(),
@@ -199,7 +183,7 @@ export interface BlobQueueSnapshot {
 // -------------------------------------------------------------------
 
 export class BlobSyncManager {
-	private presignClient: BlobPresignClient;
+	private blobClient: BlobHttpClient;
 
 	/** Pending uploads keyed by path (deduped). */
 	private uploadQueue = new Map<string, UploadItem>();
@@ -253,11 +237,10 @@ export class BlobSyncManager {
 		hashCache: BlobHashCache,
 		private trace?: TraceRecord,
 	) {
-		const roomId = "v1:" + settings.vaultId;
-		this.presignClient = new BlobPresignClient(
+		this.blobClient = new BlobHttpClient(
 			settings.host,
 			settings.token,
-			roomId,
+			settings.vaultId,
 			settings.trace,
 		);
 		this.maxConcurrency = settings.attachmentConcurrency;
@@ -546,31 +529,18 @@ export class BlobSyncManager {
 			}
 
 			// Check if R2 already has this blob (content-addressed dedup)
-			const present = await this.presignClient.exists([hash]);
+			const present = await this.blobClient.exists([hash]);
 			if (!present.includes(hash)) {
 				// Need actual bytes for upload — read if we used cache
 				if (!data) {
 					data = await this.app.vault.readBinary(file);
 				}
 
-				// Upload to R2
+				// Upload through the Worker
 				const mime = guessMime(item.path);
-				const { url } = await this.presignClient.presignPut(hash, mime, data.byteLength);
+				await this.blobClient.upload(hash, mime, data);
 
-				const uploadRes = await requestUrl({
-					url,
-					method: "PUT",
-					body: data,
-					headers: {
-						"Content-Type": mime,
-					},
-				});
-
-				if (uploadRes.status < 200 || uploadRes.status >= 300) {
-					throw new Error(`R2 PUT failed: ${uploadRes.status}`);
-				}
-
-				this.log(`upload: "${item.path}" uploaded to R2 (${data.byteLength} bytes)`);
+				this.log(`upload: "${item.path}" uploaded (${data.byteLength} bytes)`);
 			} else {
 				this.log(`upload: "${item.path}" already in R2 (dedup), updating CRDT only`);
 			}
@@ -590,7 +560,7 @@ export class BlobSyncManager {
 				}, delay);
 			} else {
 				console.error(
-					`[vault-crdt-sync:blob] Upload failed permanently for "${item.path}":`,
+					`[yaos:blob] Upload failed permanently for "${item.path}":`,
 					err,
 				);
 			}
@@ -695,16 +665,7 @@ export class BlobSyncManager {
 				}
 			}
 
-			// Presign GET
-			const { url } = await this.presignClient.presignGet(item.hash);
-
-			// Download
-			const res = await requestUrl({ url, method: "GET" });
-			if (res.status < 200 || res.status >= 300) {
-				throw new Error(`R2 GET failed: ${res.status}`);
-			}
-
-			const data = res.arrayBuffer;
+			const data = await this.blobClient.download(item.hash);
 
 			// Verify hash of downloaded data
 			const downloadHash = await hashArrayBuffer(data);
@@ -760,7 +721,7 @@ export class BlobSyncManager {
 				}, delay);
 			} else {
 				console.error(
-					`[vault-crdt-sync:blob] Download failed permanently for "${item.path}":`,
+					`[yaos:blob] Download failed permanently for "${item.path}":`,
 					err,
 				);
 			}
@@ -783,7 +744,7 @@ export class BlobSyncManager {
 				this.log(`handleRemoteDelete: deleted "${path}" from disk`);
 			} catch (err) {
 				console.error(
-					`[vault-crdt-sync:blob] handleRemoteDelete failed for "${path}":`,
+					`[yaos:blob] handleRemoteDelete failed for "${path}":`,
 					err,
 				);
 			}
@@ -938,7 +899,7 @@ export class BlobSyncManager {
 	private log(msg: string): void {
 		this.trace?.("blob", msg);
 		if (this.debug) {
-			console.log(`[vault-crdt-sync:blob] ${msg}`);
+			console.log(`[yaos:blob] ${msg}`);
 		}
 	}
 }
