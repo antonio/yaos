@@ -19,6 +19,8 @@ function escapeHtml(value: string): string {
 
 export function renderSetupPage(options: SetupPageOptions): string {
 	const safeHost = escapeHtml(options.host);
+	const releaseZipUrl = "https://github.com/kavinsood/yaos/releases/latest/download/yaos.zip";
+	const installGuideUrl = "https://github.com/kavinsood/yaos#installation";
 	return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -30,24 +32,69 @@ export function renderSetupPage(options: SetupPageOptions): string {
     body {
       margin: 0;
       font-family: ui-sans-serif, system-ui, sans-serif;
-      background: radial-gradient(circle at top, #16324f, #08111d 60%);
+      background:
+        radial-gradient(circle at 20% 20%, rgba(123, 223, 246, 0.16), transparent 38%),
+        radial-gradient(circle at 80% 0%, rgba(255, 197, 90, 0.14), transparent 30%),
+        linear-gradient(180deg, #08111d 0%, #0d1725 52%, #08111d 100%);
       color: #f4f7fb;
       min-height: 100vh;
       display: grid;
       place-items: center;
       padding: 24px;
+      overflow-x: hidden;
     }
     .card {
-      width: min(560px, 100%);
+      width: min(760px, 100%);
       background: rgba(8, 17, 29, 0.92);
       border: 1px solid rgba(161, 205, 255, 0.22);
-      border-radius: 18px;
+      border-radius: 24px;
       padding: 28px;
       box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+      position: relative;
+      overflow: hidden;
     }
-    h1 { margin: 0 0 12px; font-size: 28px; }
+    .card::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(115deg, transparent 28%, rgba(123, 223, 246, 0.12) 48%, transparent 68%);
+      transform: translateX(-120%);
+      opacity: 0;
+      pointer-events: none;
+    }
+    .card.claimed::before {
+      animation: sweep 1.1s ease forwards;
+    }
+    h1 { margin: 0 0 12px; font-size: 32px; }
     p { margin: 0 0 14px; line-height: 1.5; color: #d9e6f4; }
     .hint { font-size: 13px; color: #a9c0d8; }
+    .hero {
+      display: grid;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      width: fit-content;
+      border-radius: 999px;
+      padding: 8px 12px;
+      background: rgba(123, 223, 246, 0.1);
+      border: 1px solid rgba(123, 223, 246, 0.18);
+      color: #bdeffd;
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .eyebrow::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: #7bdff6;
+      box-shadow: 0 0 16px rgba(123, 223, 246, 0.55);
+    }
     button, a.cta {
       display: inline-flex;
       align-items: center;
@@ -60,18 +107,27 @@ export function renderSetupPage(options: SetupPageOptions): string {
       font-weight: 700;
       text-decoration: none;
       cursor: pointer;
-      margin-top: 8px;
+      transition: transform 140ms ease, box-shadow 140ms ease, opacity 140ms ease;
+    }
+    button:hover, a.cta:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 12px 26px rgba(123, 223, 246, 0.18);
     }
     button[disabled] { opacity: 0.6; cursor: wait; }
     .stack { display: grid; gap: 12px; margin-top: 18px; }
     .panel {
       display: none;
-      background: rgba(123, 223, 246, 0.08);
+      background: linear-gradient(180deg, rgba(123, 223, 246, 0.08), rgba(123, 223, 246, 0.03));
       border: 1px solid rgba(123, 223, 246, 0.18);
-      border-radius: 14px;
-      padding: 14px;
+      border-radius: 18px;
+      padding: 18px;
+      opacity: 0;
+      transform: translateY(14px) scale(0.98);
     }
-    .panel.show { display: block; }
+    .panel.show {
+      display: block;
+      animation: rise-in 420ms cubic-bezier(.2, .9, .2, 1) forwards;
+    }
     code, textarea {
       width: 100%;
       box-sizing: border-box;
@@ -85,39 +141,155 @@ export function renderSetupPage(options: SetupPageOptions): string {
     }
     textarea { min-height: 78px; resize: vertical; }
     .row { display: flex; gap: 10px; flex-wrap: wrap; }
+    .hero-actions {
+      margin-top: 6px;
+    }
     .ghost {
       background: transparent;
       color: #d9e6f4;
       border: 1px solid rgba(161, 205, 255, 0.22);
     }
-    #status { min-height: 22px; color: #ffd8a8; }
+    .ghost:hover {
+      box-shadow: none;
+      border-color: rgba(161, 205, 255, 0.36);
+    }
+    #status { min-height: 22px; color: #ffd8a8; margin-top: 8px; }
+    .success-layout {
+      display: grid;
+      gap: 18px;
+      align-items: start;
+    }
+    .success-header {
+      display: grid;
+      gap: 8px;
+    }
+    .success-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      width: fit-content;
+      border-radius: 999px;
+      padding: 8px 12px;
+      background: rgba(136, 255, 184, 0.1);
+      border: 1px solid rgba(136, 255, 184, 0.22);
+      color: #c8ffd9;
+      font-size: 12px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .success-badge::before {
+      content: "";
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: #88ffb8;
+      box-shadow: 0 0 18px rgba(136, 255, 184, 0.45);
+      animation: pulse 1.8s ease-in-out infinite;
+    }
+    .success-grid {
+      display: grid;
+      gap: 18px;
+    }
+    .steps {
+      display: grid;
+      gap: 10px;
+    }
+    .step {
+      border-radius: 14px;
+      padding: 12px 14px;
+      background: rgba(4, 10, 18, 0.55);
+      border: 1px solid rgba(161, 205, 255, 0.12);
+    }
+    .step strong {
+      display: block;
+      margin-bottom: 4px;
+      color: #f4f7fb;
+      font-size: 13px;
+    }
+    @media (min-width: 780px) {
+      .success-grid {
+        grid-template-columns: minmax(0, 1fr);
+      }
+    }
+    @media (max-width: 779px) {
+      h1 { font-size: 28px; }
+      .card { padding: 22px; border-radius: 20px; }
+    }
+    @keyframes rise-in {
+      from { opacity: 0; transform: translateY(14px) scale(0.98); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.2); opacity: 0.75; }
+    }
+    @keyframes sweep {
+      0% { transform: translateX(-120%); opacity: 0; }
+      20% { opacity: 1; }
+      100% { transform: translateX(120%); opacity: 0; }
+    }
   </style>
 </head>
 <body>
   <main class="card">
-    <h1>Claim your YAOS server</h1>
-    <p>This Worker is ready for markdown sync. Claim it once, then open Obsidian with a one-tap setup link.</p>
-    <p class="hint">Server: ${safeHost}</p>
+    <section class="hero">
+      <div class="eyebrow">One-time setup</div>
+      <h1 id="hero-title">Claim your YAOS server</h1>
+      <p id="hero-copy">This Worker is ready for markdown sync. Claim it once, then connect Obsidian with a one-tap setup link.</p>
+      <p class="hint">Server: ${safeHost}</p>
+    </section>
     <div id="status" aria-live="polite"></div>
-    <button id="claim">Claim server</button>
+    <div class="row hero-actions">
+      <button id="claim">Claim server</button>
+    </div>
     <div id="success" class="panel stack">
-      <p><strong>Saved.</strong> This token is shown only here. Keep it somewhere safe.</p>
-      <label>
-        <span class="hint">Token</span>
-        <textarea id="token" readonly></textarea>
-      </label>
-      <label>
-        <span class="hint">Obsidian setup link</span>
-        <textarea id="pair" readonly></textarea>
-      </label>
-      <div class="row">
-        <a id="open" class="cta" href="#">Open in Obsidian</a>
-        <button id="copy-token" class="ghost" type="button">Copy token</button>
-        <button id="copy-link" class="ghost" type="button">Copy link</button>
+      <div class="success-layout">
+        <div class="success-header">
+          <div class="success-badge">Server claimed</div>
+          <p><strong>Enjoy.</strong> Your server is now locked in and ready. Open the setup link in Obsidian, or copy it to another device.</p>
+        </div>
+        <div class="success-grid">
+          <div class="stack">
+            <div class="row">
+              <a id="open" class="cta" href="#">Open in Obsidian</a>
+            </div>
+            <div class="row">
+              <a class="ghost" href="${releaseZipUrl}">Download plugin zip</a>
+              <a class="ghost" href="${installGuideUrl}">How to install</a>
+            </div>
+            <div class="steps">
+              <div class="step">
+                <strong>Install YAOS if you have not yet</strong>
+                Download <code>yaos.zip</code>, place <code>main.js</code>, <code>manifest.json</code>, and <code>styles.css</code> in <code>.obsidian/plugins/yaos/</code>, then reload Obsidian.
+              </div>
+              <div class="step">
+                <strong>Connect this device</strong>
+                Use <em>Open in Obsidian</em> to hand the host and token straight to the plugin.
+              </div>
+              <div class="step">
+                <strong>Connect another device</strong>
+                Copy the setup link below into another device and open it there.
+              </div>
+            </div>
+            <label>
+              <span class="hint">Token</span>
+              <textarea id="token" readonly></textarea>
+            </label>
+            <label>
+              <span class="hint">Obsidian setup link</span>
+              <textarea id="pair" readonly></textarea>
+            </label>
+            <div class="row">
+              <button id="copy-token" class="ghost" type="button">Copy token</button>
+              <button id="copy-link" class="ghost" type="button">Copy link</button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </main>
   <script>
+    const cardEl = document.querySelector(".card");
     const claimButton = document.getElementById("claim");
     const statusEl = document.getElementById("status");
     const successEl = document.getElementById("success");
@@ -158,13 +330,14 @@ export function renderSetupPage(options: SetupPageOptions): string {
         pairEl.value = data.obsidianUrl || "";
         openEl.href = data.obsidianUrl || "#";
         successEl.classList.add("show");
-        statusEl.textContent = "Server claimed. Open the link on the device you want to connect.";
+        cardEl.classList.add("claimed");
+        claimButton.closest(".hero-actions").style.display = "none";
+        statusEl.textContent = "Server claimed. Open the link in Obsidian, or copy it for another device.";
       } catch (error) {
         statusEl.textContent = "Claim failed: " + (error && error.message ? error.message : String(error));
         claimButton.disabled = false;
       }
     });
-
     copyTokenEl.addEventListener("click", () => copy(tokenEl.value));
     copyLinkEl.addEventListener("click", () => copy(pairEl.value));
   </script>
