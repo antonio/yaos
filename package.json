@@ -1,13 +1,15 @@
 {
-	"name": "vault-crdt-sync",
-	"version": "0.1.4",
-	"description": "Real-time collaborative vault sync across devices using Yjs CRDTs and PartyKit.",
+	"name": "yaos",
+	"version": "0.2.0",
+	"description": "Real-time collaborative vault sync across devices using Yjs CRDTs and Cloudflare Workers.",
 	"main": "main.js",
 	"type": "module",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
-		"test:ci": "node --import jiti/register tests/diff-regressions.mjs && node tests/disk-mirror-regressions.mjs && node tests/markdown-ingest-regressions.mjs && node --import jiti/register tests/closed-file-mirror.ts && node --import jiti/register tests/folder-rename.ts",
+		"test:regressions": "node --import jiti/register tests/diff-regressions.mjs && node tests/disk-mirror-regressions.mjs && node tests/markdown-ingest-regressions.mjs && node --import jiti/register tests/closed-file-mirror.ts && node --import jiti/register tests/folder-rename.ts",
+		"test:integration:worker": "node tests/worker-integration.mjs",
+		"test:ci": "npm run test:regressions && npm run test:integration:worker",
 		"version": "node version-bump.mjs && git add manifest.json versions.json",
 		"lint": "eslint ."
 	},
@@ -30,9 +32,10 @@
 		"fast-diff": "^1.3.0",
 		"fflate": "^0.8.2",
 		"obsidian": "1.8.7",
+		"partyserver": "0.3.2",
 		"y-codemirror.next": "^0.3.5",
 		"y-indexeddb": "^9.0.12",
-		"y-partykit": "^0.0.25",
+		"y-partyserver": "2.1.2",
 		"yjs": "^13.6.20"
 	}
 }

@@ -1,5 +1,5 @@
 import * as Y from "yjs";
-import YPartyKitProvider from "y-partykit/provider";
+import YSyncProvider from "y-partyserver/provider";
 import { IndexeddbPersistence } from "y-indexeddb";
 import { normalizePath } from "obsidian";
 import { type FileMeta, type BlobRef, type BlobMeta, type BlobTombstone, ORIGIN_SEED } from "../types";
@@ -15,7 +15,7 @@ const PROVIDER_SYNC_TIMEOUT_MS = 10_000;
 
 /**
  * Reconnection config.
- * y-partykit uses `2^n * 100ms` capped at `maxBackoffTime`.
+ * y-partyserver uses `2^n * 100ms` capped at `maxBackoffTime`.
  * Default is 2500ms which is aggressive for mobile. We raise it to 30s
  * and the natural jitter from network latency + varying reconnect
  * timing provides sufficient de-correlation.
@@ -29,7 +29,7 @@ const RENAME_BATCH_MS = 50;
 export type ReconcileMode = "conservative" | "authoritative";
 
 /**
- * Manages the vault-wide Y.Doc, the PartyKit provider, IndexedDB
+ * Manages the vault-wide Y.Doc, the Worker sync provider, IndexedDB
  * persistence, and the shared Yjs maps.
  *
  * Schema:
@@ -43,7 +43,7 @@ export type ReconcileMode = "conservative" | "authoritative";
  */
 export class VaultSync {
 	readonly ydoc: Y.Doc;
-	readonly provider: YPartyKitProvider;
+	readonly provider: YSyncProvider;
 	readonly persistence: IndexeddbPersistence;
 
 	readonly pathToId: Y.Map<string>;
@@ -78,6 +78,7 @@ export class VaultSync {
 	 * When set, the plugin should stop reconnecting.
 	 */
 	private _fatalAuthError = false;
+	private _fatalAuthCode: "unauthorized" | "server_misconfigured" | "unclaimed" | null = null;
 
 	/** True if IndexedDB encountered an error (unavailable, quota, etc). */
 	private _idbError = false;
@@ -114,8 +115,8 @@ export class VaultSync {
 		this.blobMeta = this.ydoc.getMap<BlobMeta>("blobMeta");
 		this.blobTombstones = this.ydoc.getMap<BlobTombstone>("blobTombstones");
 
-		const roomId = "v1:" + settings.vaultId;
-		const idbName = `vault-crdt-sync:${settings.vaultId}`;
+		const roomId = settings.vaultId;
+		const idbName = `yaos:${settings.vaultId}`;
 
 		this.log(`Connecting to ${settings.host} room=${roomId}`);
 		this.log(`IndexedDB database: ${idbName}`);
@@ -129,7 +130,7 @@ export class VaultSync {
 		(this.persistence as unknown as { _db: Promise<IDBDatabase> })._db
 			.catch((err: unknown) => {
 				this._idbError = true;
-				console.error("[vault-crdt-sync] IndexedDB failed to open:", err);
+				console.error("[yaos] IndexedDB failed to open:", err);
 			});
 
 		const params: Record<string, string> = { token: settings.token };
@@ -138,8 +139,10 @@ export class VaultSync {
 			params.trace = options.traceContext.traceId;
 			params.boot = options.traceContext.bootId;
 		}
+		const syncPrefix = `/vault/sync/${encodeURIComponent(roomId)}`;
 
-		this.provider = new YPartyKitProvider(settings.host, roomId, this.ydoc, {
+		this.provider = new YSyncProvider(settings.host, roomId, this.ydoc, {
+			prefix: syncPrefix,
 			params,
 			connect: true,
 			maxBackoffTime: MAX_BACKOFF_TIME_MS,
@@ -165,8 +168,12 @@ export class VaultSync {
 			if (typeof event.data !== "string") return;
 			try {
 				const msg = JSON.parse(event.data);
-				if (msg.type === "error" && (msg.code === "unauthorized" || msg.code === "server_misconfigured")) {
+				if (
+					msg.type === "error"
+					&& (msg.code === "unauthorized" || msg.code === "server_misconfigured" || msg.code === "unclaimed")
+				) {
 					this._fatalAuthError = true;
+					this._fatalAuthCode = msg.code;
 					this.log(`Fatal auth error: ${msg.code} — stopping reconnection`);
 					this.provider.disconnect();
 				}
@@ -1011,13 +1018,17 @@ export class VaultSync {
 		return this._fatalAuthError;
 	}
 
+	get fatalAuthCode(): "unauthorized" | "server_misconfigured" | "unclaimed" | null {
+		return this._fatalAuthCode;
+	}
+
 	get idbError(): boolean {
 		return this._idbError;
 	}
 
 	/** The IndexedDB database name for this vault. */
 	get idbName(): string {
-		return `vault-crdt-sync:${this.sys.get("vaultId") ?? "unknown"}`;
+		return `yaos:${this.sys.get("vaultId") ?? "unknown"}`;
 	}
 
 	/**
@@ -1063,13 +1074,13 @@ export class VaultSync {
 	 * Safe to call after destroy() — uses the raw IDB deleteDatabase API.
 	 */
 	static deleteIdb(vaultId: string): Promise<void> {
-		const name = `vault-crdt-sync:${vaultId}`;
+		const name = `yaos:${vaultId}`;
 		return new Promise((resolve, reject) => {
 			const req = indexedDB.deleteDatabase(name);
 			req.onsuccess = () => resolve();
 			req.onerror = () => reject(req.error);
 			req.onblocked = () => {
-				console.warn(`[vault-crdt-sync] IDB delete blocked for "${name}"`);
+				console.warn(`[yaos] IDB delete blocked for "${name}"`);
 				// Resolve anyway — it'll be deleted when connections close
 				resolve();
 			};
@@ -1118,7 +1129,7 @@ export class VaultSync {
 		}
 		this.trace?.("sync", msg);
 		if (this.debug) {
-			console.log(`[vault-crdt-sync] ${msg}`);
+			console.log(`[yaos] ${msg}`);
 		}
 	}
 }
