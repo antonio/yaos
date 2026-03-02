@@ -1,6 +1,25 @@
-# Vault CRDT Sync
+# YAOS
 
-Real-time Obsidian vault sync using [Yjs](https://yjs.dev/) CRDTs and [PartyKit](https://partykit.io/). Every markdown file is backed by a conflict-free replicated data type — edits merge automatically across devices with no last-write-wins conflicts.
+Real-time, shared-state sync for Obsidian.
+
+YAOS is not a timer-based file mover. It treats your vault as collaborative state: markdown edits are CRDT operations, not delayed file copies, so open notes update across devices immediately and merge without last-write-wins conflicts.
+
+Obsidian already has an excellent paid sync product, and for most people it is the best "just works" option. YAOS exists for the narrower case where you want a self-hosted, local-first setup with the same core property that matters most: when you type on one device, the other device should reflect shared state, not eventually notice that a file changed.
+
+That design choice is the whole point. Git, cloud drives, timer-based sync plugins, and even tools like Syncthing are fundamentally moving files around. YAOS is built around the idea that note-taking feels better when sync behaves like a live collaborative editor while still preserving a normal local Obsidian vault on disk.
+
+For the deeper design rationale and recent hardening work, see **[ENGINEERING.md](ENGINEERING.md)**.
+
+## Why YAOS exists
+
+Most alternatives solve a different problem:
+
+- **Git** is great for deliberate commits, not tiny note edits across devices all day
+- **Cloud drive clients** replicate files, but they do not understand shared editing state
+- **Many sync plugins** scan, upload, and sleep; they are file movers running on a timer
+- **Syncthing** gets closer to real-time, but it is still syncing files, not collaborative state
+
+Those tools can absolutely be good enough, and for some people they are the right tradeoff. YAOS exists because there is a real difference between "my files eventually converge" and "my note is shared state right now."
 
 ## Features
 
@@ -17,33 +36,37 @@ Real-time Obsidian vault sync using [Yjs](https://yjs.dev/) CRDTs and [PartyKit]
 The production bundle is currently about **235 KB raw / 69 KB gzipped** — small enough to stay invisible at startup.
 It keeps that footprint by externalizing Obsidian and CodeMirror, so the shipped code is just the sync engine: Yjs, persistence/network bindings, fast diffing, and snapshot compression.
 
-For the engineering rationale behind the recent hardening work (diff rewrite, persistence serialization, HTTP auth changes, server limits, and known architectural tradeoffs), see **[docs/engineering-notes.md](docs/engineering-notes.md)**.
-
 ## Requirements
 
 - Obsidian 1.5.0+
 - A sync server (see [Server setup](#server-setup))
 - For attachment sync / snapshots: R2 bucket configured on the server
 
+## Choose your setup path
+
+YAOS currently has two sensible hosting modes:
+
+- **Quickstart**: deploy to PartyKit-managed hosting and get markdown sync working first. This is the fastest path and does not require your own Cloudflare account.
+- **Full self-hosted**: deploy to your own Cloudflare account. This is the better fit if you want attachments, snapshots, a custom domain, or full control over the infrastructure.
+
+The recommended order is simple: get markdown sync working first, then add R2-powered attachments and snapshots only if you want them.
+
 ## Installation
 
 ### Manual install (recommended for personal use)
 
-1. Download from the [latest release](https://github.com/kavinsood/do-sync/releases):
-   - `main.js`
-   - `manifest.json`
-   - `styles.css`
+1. Download `yaos.zip` from the [latest release](https://github.com/kavinsood/do-sync/releases).
 
 2. Create the plugin folder in your vault:
    ```
-   <vault>/.obsidian/plugins/vault-crdt-sync/
+   <vault>/.obsidian/plugins/yaos/
    ```
 
-3. Copy the three files into that folder.
+3. Extract `yaos.zip`, then copy `main.js`, `manifest.json`, and `styles.css` into that folder.
 
 4. Restart Obsidian, then enable the plugin in **Settings → Community plugins**.
 
-To update: download new release files and replace the old ones.
+To update: download the latest `yaos.zip` and replace the old plugin files.
 
 ### Build from source
 
@@ -58,7 +81,7 @@ Copy `main.js`, `manifest.json`, and `styles.css` to your vault's plugin folder.
 
 ## Configuration
 
-After enabling, go to **Settings → Vault CRDT sync**:
+After enabling, go to **Settings → YAOS**:
 
 | Setting | Description |
 |---------|-------------|
@@ -103,7 +126,7 @@ Snapshots are point-in-time backups of your vault's CRDT state, stored in R2.
 - **On-demand**: Use "Take snapshot now" before risky operations (AI refactors, bulk edits)
 - **Selective restore**: Browse snapshots, see a diff of what changed, restore individual files
 - **Undelete**: Restore files that were deleted since the snapshot
-- **Pre-restore backup**: Before restoring, current file content is saved to `.obsidian/plugins/vault-crdt-sync/restore-backups/`
+- **Pre-restore backup**: Before restoring, current file content is saved to `.obsidian/plugins/yaos/restore-backups/`
 
 Requires R2 to be configured on the server.
 
@@ -123,11 +146,13 @@ If sync seems stuck after switching networks, use "Reconnect to sync server" fro
 The plugin needs a PartyKit server. See **[server/README.md](server/README.md)** for:
 
 - Local development setup
-- Deploy to PartyKit (managed hosting)
-- Deploy to your own Cloudflare account
-- R2 bucket setup for attachments and snapshots
+- PartyKit-managed quickstart
+- Full self-hosted deploys on your own Cloudflare account
+- R2 setup for attachments and snapshots
 - Secret management and rotation
 - Server-side limits and hardening behavior
+
+YAOS is intended to be self-deployed. Your server host, PartyKit service name, custom domain, and R2 bucket name can be whatever you control; the names shown in the docs are examples, not required identifiers.
 
 ## How it works
 
@@ -135,10 +160,16 @@ The plugin needs a PartyKit server. See **[server/README.md](server/README.md)**
 2. Today, those per-file `Y.Text` values live inside one shared vault-level `Y.Doc`, which keeps collaboration simple and fast for normal-sized note vaults
 3. Local markdown filesystem events are coalesced by path and drained into the CRDT at I/O speed, so bursty create/modify storms do not trigger one import per event
 4. Live editor edits flow through the Yjs binding to that shared document
-5. The PartyKit server relays updates to all connected devices
-6. Updates are persisted in Durable Object storage (survives server restarts)
-7. Offline edits are stored in IndexedDB and sync on reconnect
-8. Attachments sync separately via content-addressed R2 storage
+5. One vault maps to one PartyKit room backed by a Durable Object, so the shared state survives server restarts
+6. Offline edits are stored in IndexedDB and sync on reconnect
+7. Attachments sync separately via content-addressed R2 storage instead of being forced through the text CRDT
+8. Daily and on-demand snapshots exist as a safety net, not as the primary sync mechanism
+
+In practice, that means:
+
+- your vault still exists locally as normal files
+- Obsidian keeps behaving like Obsidian
+- YAOS keeps the disk mirror and the shared CRDT state aligned instead of asking devices to take polite turns uploading files later
 
 ## Releasing
 
@@ -149,7 +180,17 @@ npm version patch  # or minor/major
 git push --follow-tags
 ```
 
-The workflow builds and attaches `main.js`, `manifest.json`, `styles.css` to a GitHub Release.
+The workflow builds and attaches `yaos.zip` to a GitHub Release.
+
+## Limits and tradeoffs
+
+YAOS is optimized for personal or small-team note vaults, not for arbitrarily huge filesystem trees.
+
+- It currently keeps one shared `Y.Doc` for the vault, which keeps collaboration simple but gives the design a large-vault memory ceiling.
+- Tombstones are retained on purpose so stale clients do not resurrect deleted files.
+- Blob sync is intentionally conservative: a little less throughput is preferable to a more complex scheduler with harder-to-debug failure modes.
+
+If you want the detailed architecture and the reasoning behind these tradeoffs, read **[ENGINEERING.md](ENGINEERING.md)**.
 
 ## Troubleshooting
 

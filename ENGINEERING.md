@@ -1,6 +1,6 @@
 # Engineering notes
 
-This document explains the main architecture choices and recent hardening work in Vault CRDT Sync.
+This document explains the main architecture choices and recent hardening work in YAOS.
 
 It is not a user guide. It is a developer-facing summary of what changed, why it changed, and which tradeoffs are intentional.
 
@@ -175,9 +175,9 @@ This is not ideal, but it is currently the most practical way to preserve the pl
 
 The important constraint is that this hack should stay isolated and obvious so it can be replaced or updated if the upstream library changes.
 
-## Why the current architecture is still the right one
+## Architectural fit
 
-This plugin is optimized for:
+YAOS is optimized for:
 
 - personal or small-team note vaults
 - real-time text collaboration
@@ -185,72 +185,42 @@ This plugin is optimized for:
 
 It is not trying to be a generic "sync any arbitrary 50 GB filesystem forever" engine.
 
-That is why some design choices are intentionally different from file-pushing sync tools:
+That is why several design choices are intentionally different from file-pushing sync tools:
 
 - text lives in CRDTs, not last-writer-wins file copies
 - attachments are content-addressed in object storage
-- snapshots capture CRDT state directly
+- snapshots capture CRDT state directly, not a filesystem copy protocol
 
-That gives better collaboration ergonomics for normal note-taking workloads.
+This gives much better collaboration ergonomics for the workload the project actually targets, at the cost of a lower large-vault ceiling.
 
-The known ceiling is very large vault scale.
-
-The key point is that architecture only makes sense relative to the constraints it is optimizing for.
-This plugin is not "a better Obsidian Sync" in the abstract. It is a different architecture aimed at a different workload.
-
-## Why the single `Y.Doc` is reasonable here
+## Why the single `Y.Doc` is still reasonable
 
 For a typical personal or small-team note vault, a single shared `Y.Doc` is a practical tradeoff:
 
 - it gives real-time, character-level conflict resolution across the whole vault
 - it keeps the sync model simple: one CRDT state graph, one websocket room, one persistence layer
-- it avoids layering a collaborative model on top of a file-pushing protocol that was never designed for that job
+- it avoids layering collaborative behavior on top of a file protocol that was never designed for shared editing
 
-That is why this plugin feels more like a local-first collaborative editor and less like a traditional "sync files around and hope conflicts are rare" tool.
+That simplicity is worth a lot operationally. The tradeoff is the known scaling ceiling described above: a monolithic in-memory CRDT will eventually cost more in RAM and startup time than a more fragmented design.
 
-## Why Obsidian itself cannot optimize the same way
+## What changes at larger scale
 
-An official sync product has to support a much broader range of users, including extremely large vaults with huge numbers of generated files and attachments.
+The reason large sync products make different choices is straightforward: their constraints are broader.
 
-That changes the constraints completely:
+At very large vault sizes:
 
-- a monolithic in-memory CRDT for a very large vault can become expensive in RAM and startup time, especially on mobile
-- file-level syncing has a simpler memory ceiling because each file can be treated independently
-- the tradeoff is worse collaboration ergonomics, because file-level tools rely on coarse conflict handling instead of structured merge semantics
+- a monolithic in-memory CRDT becomes more expensive on startup, especially on mobile
+- file-level or shard-level synchronization has a simpler memory ceiling
+- the cost is weaker collaboration semantics, because conflict handling becomes coarser
 
-In other words, a file-pushing sync engine scales farther, but it gives up the collaboration behavior this plugin is optimized for.
+That is also the lesson from other collaborative note systems: when the collection gets large enough, you partition the state instead of loading one giant collaborative graph forever.
 
-## The Apple Notes comparison
-
-Apple Notes also solves this by narrowing the scope of its collaborative state.
-
-At a high level, the model is closer to:
-
-- local-first database storage for note lists, folders, and metadata
-- richer merge logic for note content itself
-- simpler timestamp-style conflict handling for metadata
-- aggressive pruning of old sync state once the server has acknowledged it
-
-That is the same general lesson: if you need to scale to very large collections safely on constrained devices, you partition the problem instead of loading one giant collaborative graph forever.
-
-## The actual tradeoff
-
-This plugin intentionally trades some large-vault scalability for much better real-time collaboration ergonomics in the workloads it targets.
-
-That is a conscious choice:
-
-- PartyKit Durable Objects hold the shared source of truth
-- Yjs handles the text merge semantics
-- blobs are content-addressed in R2 instead of being forced through the text CRDT
-
-The result is a real distributed system, not a thin wrapper over file copy semantics.
-
-The cost is that there is a hard ceiling. If this project ever needs to support very large vaults at the same reliability level, the likely next architecture is:
+If YAOS ever needs to support that scale without giving up the current reliability goals, the likely next step is:
 
 - shard CRDT state so each file (or small file group) has its own document
 - move more folder and metadata state into a cheaper index structure
 
-Until that scale becomes a real product requirement, the current single-`Y.Doc` design is an intentional and defensible tradeoff.
+Until that becomes a real product requirement, the current single-`Y.Doc` design remains the more practical choice.
 
 ## What is intentionally not "pure"
 
