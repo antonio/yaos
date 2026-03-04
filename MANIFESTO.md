@@ -9,6 +9,8 @@ i could write way too much about it, but none of us are here for that honestly.
 
 obsidian clicks for me in a very specific way. i have disabled almost everything, and i use it as a glorified apple notes with bells and whistles.
 
+You isolated the exact reason why third-party sync plugins (like Remotely Save) always feel like fragile hacks: they are trying to layer a distributed state model over a dumb file-pushing protocol.
+
 it’s zen where it needs to be, and power-user where it needs to.
 
 obsidian is free to use, and it’s local-first (all the files live on your computer in markdown).
