@@ -62,6 +62,8 @@ export const DEFAULT_SETTINGS: VaultSyncSettings = {
 	showRemoteCursors: true,
 };
 
+const CLOUDFLARE_DEPLOY_URL = "https://deploy.workers.cloudflare.com/?url=https://github.com/kavinsood/yaos/tree/main/server";
+
 /** Generate a random vault ID (16 bytes, base64url). */
 export function generateVaultId(): string {
 	return randomBase64Url(16);
@@ -94,8 +96,40 @@ export class VaultSyncSettingTab extends PluginSettingTab {
 		containerEl.empty();
 		const authMode = this.plugin.serverAuthMode;
 		const attachmentsAvailable = this.plugin.serverSupportsAttachments;
+		const setupIncomplete = !this.plugin.settings.host || !this.plugin.settings.token;
 
 		containerEl.createEl("h2", { text: "YAOS" });
+
+		if (setupIncomplete) {
+			const callout = containerEl.createDiv({ cls: "callout" });
+			callout.setAttr("data-callout", "warning");
+			callout.style.marginBottom = "16px";
+
+			const calloutTitle = callout.createDiv({ cls: "callout-title" });
+			calloutTitle.createSpan({ text: "Setup required" });
+
+			const calloutContent = callout.createDiv({ cls: "callout-content" });
+			calloutContent.createEl("p", {
+				text: "YAOS requires a free Cloudflare Worker to sync your data. It costs $0 and takes about 15 seconds.",
+			});
+
+			const hint = calloutContent.createEl("p", {
+				text: "After deploy, open your Worker URL, claim the server, then run the YAOS setup link.",
+			});
+			hint.style.marginTop = "-4px";
+
+			new Setting(calloutContent)
+				.setName("Deploy your server")
+				.setDesc("Launch one-click Cloudflare deployment in your browser.")
+				.addButton((button) =>
+					button
+						.setButtonText("Deploy to Cloudflare")
+						.setCta()
+						.onClick(() => {
+							window.open(CLOUDFLARE_DEPLOY_URL, "_blank", "noopener");
+						}),
+				);
+		}
 
 		new Setting(containerEl)
 			.setName("Server host")
