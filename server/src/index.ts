@@ -32,7 +32,8 @@ type AuthState =
 	| { mode: "claim"; claimed: true; tokenHash: string }
 	| { mode: "unclaimed"; claimed: false };
 
-type FatalAuthCode = "unauthorized" | "server_misconfigured" | "unclaimed";
+type FatalAuthCode = "unauthorized" | "server_misconfigured" | "unclaimed" | "update_required";
+const LEGACY_CLIENT_SCHEMA_VERSION = 1;
 
 function json(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body), {
@@ -91,6 +92,16 @@ function getSocketAuthToken(req: Request): string | null {
 	return new URL(req.url).searchParams.get("token");
 }
 
+function parseClientSchemaVersion(url: URL): { version: number; source: "query" | "legacy-default" } | null {
+	const raw = url.searchParams.get("schemaVersion") ?? url.searchParams.get("schema");
+	if (raw === null || raw.trim() === "") {
+		return { version: LEGACY_CLIENT_SCHEMA_VERSION, source: "legacy-default" };
+	}
+	const parsed = Number(raw);
+	if (!Number.isInteger(parsed) || parsed < 0) return null;
+	return { version: parsed, source: "query" };
+}
+
 function parseSyncPath(pathname: string): { vaultId: string } | null {
 	const directMatch = pathname.match(/^\/vault\/sync\/([^/]+)$/);
 	if (directMatch) {
@@ -115,20 +126,35 @@ function isWebSocketRequest(req: Request): boolean {
 function rejectSocket(
 	req: Request,
 	code: FatalAuthCode,
+	details: Record<string, unknown> = {},
 ): Response {
 	if (!isWebSocketRequest(req)) {
-		return json({ error: code }, code === "unauthorized" ? 401 : 503);
+		return json(
+			{ error: code },
+			code === "unauthorized"
+				? 401
+				: code === "update_required"
+					? 426
+					: 503,
+		);
 	}
 
 	const pair = new WebSocketPair();
 	const client = pair[0];
 	const server = pair[1];
 	server.accept();
-	server.send(JSON.stringify({ type: "error", code }));
+	const payload = JSON.stringify({ type: "error", code, ...details });
+	// Send a plain JSON frame first for generic websocket clients/tests.
+	server.send(payload);
+	// y-partyserver clients consume string control messages via "__YPS:".
+	// Send fatal auth payload through that channel so plugins can fail loudly.
+	server.send(`__YPS:${payload}`);
 	server.close(
 		1008,
 		code === "unauthorized"
 			? "unauthorized"
+			: code === "update_required"
+				? "update required"
 			: code === "unclaimed"
 				? "server unclaimed"
 				: "server misconfigured",
@@ -202,12 +228,15 @@ async function isAuthorized(
 	return false;
 }
 
-function buildObsidianSetupUrl(host: string, token: string): string {
+function buildObsidianSetupUrl(host: string, token: string, vaultId?: string): string {
 	const params = new URLSearchParams({
 		action: "setup",
 		host,
 		token,
 	});
+	if (vaultId) {
+		params.set("vaultId", vaultId);
+	}
 	return `obsidian://yaos?${params.toString()}`;
 }
 
@@ -253,6 +282,26 @@ async function fetchVaultDocument(env: Env, vaultId: string): Promise<Uint8Array
 		throw new Error(`document fetch failed (${res.status})`);
 	}
 	return new Uint8Array(await res.arrayBuffer());
+}
+
+async function fetchVaultSchemaVersion(env: Env, vaultId: string): Promise<number | null> {
+	try {
+		const update = await fetchVaultDocument(env, vaultId);
+		const doc = new Y.Doc();
+		try {
+			Y.applyUpdate(doc, update);
+			const stored = doc.getMap("sys").get("schemaVersion");
+			if (typeof stored === "number" && Number.isInteger(stored) && stored >= 0) {
+				return stored;
+			}
+			return null;
+		} finally {
+			doc.destroy();
+		}
+	} catch (err) {
+		console.warn("[vault-sync] schema probe failed:", err);
+		return null;
+	}
 }
 
 async function fetchVaultDebug(env: Env, vaultId: string): Promise<Response> {
@@ -429,7 +478,7 @@ const worker = {
 				return json({ error: "already_claimed" }, 403);
 			}
 
-			let body: { token?: string } = {};
+			let body: { token?: string; vaultId?: string } = {};
 			try {
 				body = await req.json() as typeof body;
 			} catch {
@@ -439,26 +488,31 @@ const worker = {
 			if (typeof body.token !== "string" || body.token.trim().length < 32) {
 				return json({ error: "invalid token" }, 400);
 			}
+			if (body.vaultId !== undefined && (typeof body.vaultId !== "string" || body.vaultId.trim().length < 8)) {
+				return json({ error: "invalid vaultId" }, 400);
+			}
 
 			const token = body.token.trim();
+			const vaultId = typeof body.vaultId === "string" ? body.vaultId.trim() : "";
 			const tokenHash = await hashToken(token);
 			const claimed = await claimServerConfig(env, tokenHash);
 			if (!claimed) {
 				return json({ error: "already_claimed" }, 403);
 			}
 
-			return json({
-				ok: true,
-				host: url.origin,
-				obsidianUrl: buildObsidianSetupUrl(url.origin, token),
-				capabilities: getCapabilities({ mode: "claim", claimed: true, tokenHash }, env),
-			});
+				return json({
+					ok: true,
+					host: url.origin,
+					obsidianUrl: buildObsidianSetupUrl(url.origin, token, vaultId || undefined),
+					capabilities: getCapabilities({ mode: "claim", claimed: true, tokenHash }, env),
+				});
 		}
 
 		const syncRoute = parseSyncPath(url.pathname);
 
 		if (syncRoute) {
 			const token = getSocketAuthToken(req);
+			const clientSchema = parseClientSchemaVersion(url);
 			if (!authState.claimed) {
 				await recordVaultTrace(env, syncRoute.vaultId, "ws-rejected", {
 					reason: "unclaimed",
@@ -480,10 +534,43 @@ const worker = {
 				const response = rejectSocket(req, "unauthorized");
 				return isWebSocketRequest(req) ? response : withCors(response);
 			}
+			if (!clientSchema) {
+				await recordVaultTrace(env, syncRoute.vaultId, "ws-rejected", {
+					reason: "update_required",
+					detail: "invalid_client_schema",
+					rawSchema: url.searchParams.get("schemaVersion") ?? url.searchParams.get("schema") ?? null,
+				});
+				const response = rejectSocket(req, "update_required", {
+					reason: "invalid_client_schema",
+					clientSchemaVersion: null,
+					roomSchemaVersion: null,
+				});
+				return isWebSocketRequest(req) ? response : withCors(response);
+			}
+
+			const roomSchemaVersion = await fetchVaultSchemaVersion(env, syncRoute.vaultId);
+			if (roomSchemaVersion !== null && clientSchema.version < roomSchemaVersion) {
+				await recordVaultTrace(env, syncRoute.vaultId, "ws-rejected", {
+					reason: "update_required",
+					detail: "client_schema_older_than_room",
+					clientSchemaVersion: clientSchema.version,
+					clientSchemaSource: clientSchema.source,
+					roomSchemaVersion,
+				});
+				const response = rejectSocket(req, "update_required", {
+					reason: "client_schema_older_than_room",
+					clientSchemaVersion: clientSchema.version,
+					roomSchemaVersion,
+				});
+				return isWebSocketRequest(req) ? response : withCors(response);
+			}
 
 			await recordVaultTrace(env, syncRoute.vaultId, "ws-connected", {
 				userAgent: req.headers.get("user-agent") ?? undefined,
 				cfRay: req.headers.get("cf-ray") ?? undefined,
+				clientSchemaVersion: clientSchema.version,
+				clientSchemaSource: clientSchema.source,
+				roomSchemaVersion,
 			});
 
 			const stub = await getServerByName(env.YAOS_SYNC, syncRoute.vaultId);

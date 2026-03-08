@@ -145,6 +145,9 @@ async function main() {
 		await waitForWorker();
 		const token = await resolveAuthToken(envToken);
 		await runCommand("node", [
+			"tests/schema-guard.mjs",
+		], token);
+		await runCommand("node", [
 			"--import",
 			"jiti/register",
 			"tests/sync-client.ts",
