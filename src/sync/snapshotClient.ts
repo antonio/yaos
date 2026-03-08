@@ -62,6 +62,86 @@ export interface SnapshotDiff {
 	blobsChanged: Array<{ path: string; snapshotHash: string; currentHash: string }>;
 }
 
+function normalizeVaultPath(path: string): string {
+	return path
+		.replace(/\\/g, "/")
+		.replace(/\/{2,}/g, "/")
+		.replace(/^\.\//, "")
+		.replace(/^\/+/, "");
+}
+
+function getStoredSchemaVersion(doc: Y.Doc): number | null {
+	const stored = doc.getMap("sys").get("schemaVersion");
+	if (typeof stored !== "number" || !Number.isInteger(stored) || stored < 0) return null;
+	return stored;
+}
+
+function usesV2MetaPathModel(doc: Y.Doc): boolean {
+	const version = getStoredSchemaVersion(doc);
+	return version !== null && version >= 2;
+}
+
+function isCandidateMetaNewer(
+	candidateId: string,
+	candidateMeta: FileMeta,
+	existingId: string,
+	existingMeta: FileMeta | undefined,
+): boolean {
+	const candidateMtime = typeof candidateMeta.mtime === "number" ? candidateMeta.mtime : 0;
+	const existingMtime = typeof existingMeta?.mtime === "number" ? existingMeta.mtime : 0;
+	if (candidateMtime !== existingMtime) return candidateMtime > existingMtime;
+	return candidateId > existingId;
+}
+
+/**
+ * Resolve active markdown paths from a doc.
+ *
+ * v2: meta is authoritative and pathToId is ignored.
+ * v1/legacy: prefer pathToId, then backfill from active meta entries.
+ */
+function collectActiveMarkdownPaths(doc: Y.Doc): Map<string, string> {
+	const meta = doc.getMap<FileMeta>("meta");
+	const pathToId = doc.getMap<string>("pathToId");
+	const resolved = new Map<string, string>();
+
+	if (usesV2MetaPathModel(doc)) {
+		meta.forEach((entry, fileId) => {
+			if (isDeletedMeta(entry) || typeof entry.path !== "string") return;
+			const path = normalizeVaultPath(entry.path);
+			if (!path) return;
+			const existingId = resolved.get(path);
+			if (!existingId) {
+				resolved.set(path, fileId);
+				return;
+			}
+			const existingMeta = meta.get(existingId);
+			if (isCandidateMetaNewer(fileId, entry, existingId, existingMeta)) {
+				resolved.set(path, fileId);
+			}
+		});
+		return resolved;
+	}
+
+	// v1 compatibility: pathToId remains authoritative.
+	pathToId.forEach((fileId, rawPath) => {
+		const path = normalizeVaultPath(rawPath);
+		if (!path) return;
+		const entry = meta.get(fileId);
+		if (isDeletedMeta(entry)) return;
+		resolved.set(path, fileId);
+	});
+
+	// Backfill paths that only exist in meta (mixed/partially migrated states).
+	meta.forEach((entry, fileId) => {
+		if (isDeletedMeta(entry) || typeof entry.path !== "string") return;
+		const path = normalizeVaultPath(entry.path);
+		if (!path || resolved.has(path)) return;
+		resolved.set(path, fileId);
+	});
+
+	return resolved;
+}
+
 // -------------------------------------------------------------------
 // HTTP client
 // -------------------------------------------------------------------
@@ -213,12 +293,9 @@ export function diffSnapshot(
 	snapshotDoc: Y.Doc,
 	liveDoc: Y.Doc,
 ): SnapshotDiff {
-	const snapPathToId = snapshotDoc.getMap<string>("pathToId");
 	const snapIdToText = snapshotDoc.getMap<Y.Text>("idToText");
-	const snapMeta = snapshotDoc.getMap<FileMeta>("meta");
 	const snapPathToBlob = snapshotDoc.getMap<BlobRef>("pathToBlob");
 
-	const livePathToId = liveDoc.getMap<string>("pathToId");
 	const liveIdToText = liveDoc.getMap<Y.Text>("idToText");
 	const livePathToBlob = liveDoc.getMap<BlobRef>("pathToBlob");
 
@@ -232,23 +309,12 @@ export function diffSnapshot(
 		blobsChanged: [],
 	};
 
-	// Collect snapshot paths (non-tombstoned)
-	const snapshotPaths = new Map<string, string>(); // path -> fileId
-	snapPathToId.forEach((fileId, path) => {
-		const meta = snapMeta.get(fileId);
-		if (meta?.deleted) return; // skip tombstoned
-		snapshotPaths.set(path, fileId);
-	});
-
-	// Collect live paths
-	const livePaths = new Set<string>();
-	livePathToId.forEach((_id, path) => {
-		livePaths.add(path);
-	});
+	const snapshotPaths = collectActiveMarkdownPaths(snapshotDoc); // path -> fileId
+	const livePaths = collectActiveMarkdownPaths(liveDoc); // path -> fileId
 
 	// Markdown diff
 	for (const [path, snapFileId] of snapshotPaths) {
-		const liveFileId = livePathToId.get(path);
+		const liveFileId = livePaths.get(path);
 		if (!liveFileId) {
 			// Deleted since snapshot
 			diff.deletedSinceSnapshot.push({ path, fileId: snapFileId });
@@ -273,7 +339,7 @@ export function diffSnapshot(
 	}
 
 	// Files created since snapshot
-	for (const path of livePaths) {
+	for (const path of livePaths.keys()) {
 		if (!snapshotPaths.has(path)) {
 			diff.createdSinceSnapshot.push(path);
 		}
@@ -348,9 +414,7 @@ export function restoreFromSnapshot(
 	liveDoc: Y.Doc,
 	options: RestoreOptions,
 ): RestoreResult {
-	const snapPathToId = snapshotDoc.getMap<string>("pathToId");
 	const snapIdToText = snapshotDoc.getMap<Y.Text>("idToText");
-	const snapMeta = snapshotDoc.getMap<FileMeta>("meta");
 	const snapPathToBlob = snapshotDoc.getMap<BlobRef>("pathToBlob");
 
 	const livePathToId = liveDoc.getMap<string>("pathToId");
@@ -358,6 +422,9 @@ export function restoreFromSnapshot(
 	const liveMeta = liveDoc.getMap<FileMeta>("meta");
 	const livePathToBlob = liveDoc.getMap<BlobRef>("pathToBlob");
 	const liveBlobTombstones = liveDoc.getMap("blobTombstones");
+	const liveUsesV2 = usesV2MetaPathModel(liveDoc);
+	const snapshotPaths = collectActiveMarkdownPaths(snapshotDoc);
+	const livePaths = collectActiveMarkdownPaths(liveDoc);
 
 	const result: RestoreResult = {
 		markdownRestored: 0,
@@ -367,15 +434,16 @@ export function restoreFromSnapshot(
 
 	liveDoc.transact(() => {
 		// Restore markdown files
-		for (const path of options.markdownPaths ?? []) {
-			const snapFileId = snapPathToId.get(path);
+		for (const requestedPath of options.markdownPaths ?? []) {
+			const path = normalizeVaultPath(requestedPath);
+			const snapFileId = snapshotPaths.get(path);
 			if (!snapFileId) continue;
 
 			const snapText = snapIdToText.get(snapFileId);
 			if (!snapText) continue;
 			const snapContent = snapText.toString();
 
-			const liveFileId = livePathToId.get(path);
+			const liveFileId = livePaths.get(path);
 
 			if (liveFileId) {
 				// File still exists in live — replace content
@@ -390,15 +458,23 @@ export function restoreFromSnapshot(
 						// Update metadata
 						liveMeta.set(liveFileId, {
 							path,
+							deleted: undefined,
+							deletedAt: undefined,
 							mtime: Date.now(),
 							device: options.device,
 						});
 					}
 				}
+				if (!liveUsesV2) {
+					livePathToId.set(path, liveFileId);
+				}
+				livePaths.set(path, liveFileId);
 			} else {
 				// File was deleted since snapshot — undelete
 				// Re-create with the snapshot's file ID and content
-				livePathToId.set(path, snapFileId);
+				if (!liveUsesV2) {
+					livePathToId.set(path, snapFileId);
+				}
 
 				// Check if the Y.Text still exists (tombstoning doesn't delete it)
 				let liveText = liveIdToText.get(snapFileId);
@@ -415,12 +491,30 @@ export function restoreFromSnapshot(
 					liveIdToText.set(snapFileId, liveText);
 				}
 
+				// Drop stale tombstones for this path to avoid path-squat ghosts.
+				const staleTombstones: string[] = [];
+				liveMeta.forEach((entry, fileId) => {
+					if (
+						fileId !== snapFileId
+						&& entry.path === path
+						&& isDeletedMeta(entry)
+					) {
+						staleTombstones.push(fileId);
+					}
+				});
+				for (const staleId of staleTombstones) {
+					liveMeta.delete(staleId);
+				}
+
 				// Clear tombstone and set fresh metadata
 				liveMeta.set(snapFileId, {
 					path,
+					deleted: undefined,
+					deletedAt: undefined,
 					mtime: Date.now(),
 					device: options.device,
 				});
+				livePaths.set(path, snapFileId);
 
 				result.markdownUndeleted++;
 			}
@@ -443,4 +537,8 @@ export function restoreFromSnapshot(
 	}, ORIGIN_RESTORE);
 
 	return result;
+}
+function isDeletedMeta(meta: FileMeta | undefined): boolean {
+	if (!meta) return false;
+	return meta.deleted === true || (typeof meta.deletedAt === "number" && Number.isFinite(meta.deletedAt));
 }
