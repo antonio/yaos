@@ -73,7 +73,7 @@ This is a contained hack, explicitly documented, and should be replaced if upstr
 
 These are deliberate compromises to preserve correctness and operability in real environments:
 
-- WebSocket auth currently accepts query param token flow because browser/WebView socket APIs make header-based auth inconsistent in practice. We keep this bounded via explicit server checks and fail-closed behavior.
+- WebSocket auth currently accepts query param token flow because browser/WebView socket APIs make header-based auth inconsistent in practice. We keep this bounded via explicit server checks and fail-closed behavior, but treat it as transitional architecture.
 - Filesystem-facing sync paths are intentionally mixed:
   markdown ingest uses a dirty-set drain loop for backpressure-aware coalescing,
   while some blob paths keep quiet-window checks because partial attachment reads are costlier and noisier than text edits.
@@ -86,3 +86,4 @@ The standard is not "perfect abstraction." The standard is explicit correctness 
 - No fully automatic HTTP bootstrap path for giant initial sync payloads yet.
 - No cryptographic prev-hash chain between journal segments yet (current model uses per-segment hash plus strict sequence validation).
 - No per-file sharded CRDT model yet (current design intentionally preserves monolithic cross-file transactional semantics).
+- WebSocket auth still supports query token transport; target state is explicit post-connect auth handshake plus short-lived session credentials.

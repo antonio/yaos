@@ -21,7 +21,35 @@ When deployed, the YAOS server boots into an "Unclaimed" state.
 - The server hashes the token (SHA-256) and stores only the hash inside a singleton Config Durable Object via an ACID transaction.
 - The setup route permanently locks itself.
 
-For subsequent authentication, the plugin utilizes modern HTTP headers—specifically Authorization: Bearer \<token>—rather than leaking the shared token into query strings, browser history, or proxies.
+For subsequent authentication, the plugin uses `Authorization: Bearer <token>` for HTTP endpoints.
+
+For WebSocket sync transport, YAOS currently includes the token as a query parameter for compatibility across browser/WebView socket APIs. This is an explicit, documented compromise for v1 and should be replaced by an explicit post-connect auth handshake in a future revision.
+
+## Current transport model (v1)
+
+- HTTP routes (`/vault/*`, setup helpers, snapshot APIs) authenticate with `Authorization: Bearer <token>`.
+- WebSocket sync (`/vault/sync/:room`) currently accepts a query token for compatibility with constrained mobile/webview environments.
+- All traffic is expected over HTTPS/WSS in normal deployment.
+
+## Threat model notes (v1)
+
+This compromise is acceptable for YAOS v1's current self-hosted model when:
+
+- TLS is enabled end-to-end (HTTPS/WSS).
+- Server/operator logs are private and access-controlled.
+- The shared token is treated as a secret and rotated when exposed.
+
+It is still not ideal because URL parameters can appear in application/server logs, browser debugging surfaces, and proxy instrumentation. For that reason, query-token auth should be treated as transitional rather than final architecture.
+
+## Planned hardening (post-v1)
+
+- Move WebSocket auth to an explicit post-connect handshake frame.
+- Prefer short-lived session credentials derived from the long-lived setup token.
+- Ensure auth material is redacted from traces and diagnostics by default.
+- Add an operator option to disable query-token WebSocket auth once clients support handshake auth.
+
+For the broader list of accepted compromises and tracked debt, see
+`engineering/warts-and-limits.md`.
 
 # The URI Protocol Handshake
 
