@@ -218,14 +218,14 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 
 		if (!this.settings.host) {
 			this.log("Host not configured — sync disabled");
-			new Notice("YAOS: configure the server host in settings to enable sync.");
+			new Notice("Configure the server host in settings to enable sync.");
 			return;
 		}
 
 		if (this.serverCapabilities?.claimed === false) {
 			this.log("Server is unclaimed — sync disabled");
 			new Notice(
-				"YAOS: open your server URL in a browser, claim it, then use the YAOS setup link.",
+				"Open your server URL in a browser, claim it, then use the setup link.",
 				10000,
 			);
 			return;
@@ -254,12 +254,12 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 				const url = new URL(this.settings.host);
 				const h = url.hostname;
 				if (url.protocol === "http:" && h !== "localhost" && h !== "127.0.0.1" && h !== "[::1]") {
-					this.log("WARNING: connecting over unencrypted HTTP to a remote host — token sent in plaintext");
-					new Notice(
-						"YAOS: connecting over unencrypted HTTP. Your token will be sent in plaintext. Use https:// for production.",
-						8000,
-					);
-				}
+						this.log("WARNING: connecting over unencrypted HTTP to a remote host — token sent in plaintext");
+						new Notice(
+							"Connecting over unencrypted HTTP. Your token will be sent in plaintext. Use HTTPS for production.",
+							8000,
+						);
+					}
 			} catch { /* invalid URL, will fail at connect */ }
 		}
 
@@ -1272,20 +1272,20 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 			id: "yaos-reconnect",
 			name: "Reconnect to sync server",
 			callback: () => {
-				if (this.vaultSync) {
-					this.vaultSync.provider.disconnect();
-					void this.vaultSync.provider.connect();
-					new Notice("YAOS: reconnecting...");
-				}
-			},
-		});
+					if (this.vaultSync) {
+						this.vaultSync.provider.disconnect();
+						void this.vaultSync.provider.connect();
+						new Notice("Reconnecting...");
+					}
+				},
+			});
 
-		this.addCommand({
-			id: "yaos-force-reconcile",
-			name: "Force reconcile vault with CRDT",
-			callback: () => {
-				if (!this.vaultSync) return;
-				const mode = this.vaultSync.getSafeReconcileMode();
+			this.addCommand({
+				id: "yaos-force-reconcile",
+				name: "Force reconcile vault with sync state",
+				callback: () => {
+					if (!this.vaultSync) return;
+					const mode = this.vaultSync.getSafeReconcileMode();
 				void this.runReconciliation(mode).then(() => {
 					this.bindAllOpenEditors();
 					this.validateAllOpenBindings("manual-reconcile");
@@ -1342,12 +1342,12 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 			},
 		});
 
-		this.addCommand({
-			id: "yaos-debug-vfs-torture-test",
-			name: "Run VFS torture test (debug)",
-			checkCallback: (checking: boolean) => {
-				if (!this.settings.debug) return false;
-				if (!checking) {
+			this.addCommand({
+				id: "yaos-debug-vfs-torture-test",
+				name: "Run filesystem torture test (debug)",
+				checkCallback: (checking: boolean) => {
+					if (!this.settings.debug) return false;
+					if (!checking) {
 					void this.runVfsTortureTest();
 				}
 				return true;
@@ -1388,9 +1388,9 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 					"Reset local cache",
 					"This will clear the local IndexedDB cache and re-sync from the server. " +
 					"Your disk files and server state are not affected. Continue?",
-					async () => {
-						this.log("Reset cache: starting");
-						new Notice("YAOS: clearing cache and re-syncing...");
+						async () => {
+							this.log("Reset cache: starting");
+							new Notice("Clearing cache and syncing again...");
 
 						this.teardownSync();
 
@@ -1401,12 +1401,12 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 							console.error("[yaos] Failed to delete IDB:", err);
 						}
 
-						this.log("Reset cache: reinitializing");
-						await this.initSync();
-						new Notice("YAOS: cache reset complete.");
-					},
-				).open();
-			},
+							this.log("Reset cache: reinitializing");
+							await this.initSync();
+							new Notice("Cache reset complete.");
+						},
+					).open();
+				},
 		});
 
 		// --- Snapshot commands ---
@@ -1418,11 +1418,11 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 				if (!this.vaultSync) {
 					new Notice("Sync not initialized");
 					return;
-				}
-				if (!this.serverSupportsSnapshots) {
-					new Notice("Snapshots are unavailable until the server has an R2 YAOS_BUCKET binding.");
-					return;
-				}
+					}
+					if (!this.serverSupportsSnapshots) {
+						new Notice("Snapshots are unavailable until object storage is configured on the server.");
+						return;
+					}
 				if (!this.vaultSync.connected) {
 					new Notice("Not connected to server — cannot create snapshot.");
 					return;
@@ -1460,11 +1460,11 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 				if (!this.vaultSync) {
 					new Notice("Sync not initialized");
 					return;
-				}
-				if (!this.serverSupportsSnapshots) {
-					new Notice("Snapshots are unavailable until the server has an R2 YAOS_BUCKET binding.");
-					return;
-				}
+					}
+					if (!this.serverSupportsSnapshots) {
+						new Notice("Snapshots are unavailable until object storage is configured on the server.");
+						return;
+					}
 				if (!this.vaultSync.connected) {
 					new Notice("Not connected to server — cannot browse snapshots.");
 					return;
@@ -1475,12 +1475,12 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 
 		// --- Reset commands ---
 
-		this.addCommand({
-			id: "yaos-nuclear-reset",
-			name: "Nuclear reset (wipe CRDT, re-seed from disk)",
-			callback: () => {
-				if (!this.vaultSync) {
-					new Notice("Sync not initialized");
+			this.addCommand({
+				id: "yaos-nuclear-reset",
+				name: "Nuclear reset (wipe sync state and reseed from disk)",
+				callback: () => {
+					if (!this.vaultSync) {
+						new Notice("Sync not initialized");
 					return;
 				}
 
@@ -1491,9 +1491,9 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 					`This will wipe all CRDT state (${pathCount} files) on both this device and the server, ` +
 					`clear the local cache, then re-seed everything from your current disk files. ` +
 					`Other connected devices will also see the reset. This cannot be undone. Continue?`,
-					async () => {
-						this.log("Nuclear reset: starting");
-						new Notice("YAOS: nuclear reset in progress...");
+						async () => {
+							this.log("Nuclear reset: starting");
+							new Notice("Nuclear reset in progress...");
 
 						// Clear CRDT maps BEFORE teardown so the deletions propagate
 						// to the server while the provider is still connected.
@@ -2571,27 +2571,27 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 			if (this.vaultSync?.connected && this.vaultSync.providerSynced && this.serverSupportsSnapshots) {
 				void this.triggerDailySnapshot();
 			}
-		} else if (lostR2) {
-			new Notice(
-				"YAOS: R2 backend is unavailable. Attachment transfers are paused and snapshots are unavailable.",
-				7000,
-			);
-		}
+			} else if (lostR2) {
+				new Notice(
+					"Object storage is unavailable. Attachment transfers are paused and snapshots are unavailable.",
+					7000,
+				);
+			}
 	}
 
-	private async confirmVaultIdSwitch(
-		currentVaultId: string,
-		incomingVaultId: string,
-		localMarkdownCount: number,
-	): Promise<boolean> {
-		return await new Promise((resolve) => {
-			new ConfirmModal(
-				this.app,
-				"Switch vault ID",
-				`YAOS pairing link points to a different vault ID. ` +
-				`Current vault ID: ${currentVaultId}. Incoming vault ID: ${incomingVaultId}. ` +
-				`This vault currently has ${localMarkdownCount} local markdown files. ` +
-				`Switching rooms may pull a different remote state. Continue and switch to the incoming vault ID?`,
+		private async confirmVaultIdSwitch(
+			currentVaultId: string,
+			incomingVaultId: string,
+			localMarkdownCount: number,
+		): Promise<boolean> {
+			return await new Promise((resolve) => {
+				new ConfirmModal(
+					this.app,
+					"Switch vault ID",
+					`This pairing link points to a different vault ID. ` +
+					`Current vault ID: ${currentVaultId}. Incoming vault ID: ${incomingVaultId}. ` +
+					`This vault currently has ${localMarkdownCount} local markdown files. ` +
+					`Switching rooms may pull a different remote state. Continue and switch to the incoming vault ID?`,
 				() => resolve(true),
 				"Switch vault ID",
 				"Keep current vault ID",
@@ -2600,20 +2600,20 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 		});
 	}
 
-	private async handleSetupLink(params: Record<string, string>): Promise<void> {
-		const host = typeof params.host === "string" ? params.host.trim() : "";
-		const token = typeof params.token === "string" ? params.token.trim() : "";
-		const incomingVaultId = typeof params.vaultId === "string" ? params.vaultId.trim() : "";
-		if (!host || !token) {
-			new Notice("YAOS: setup link is missing host or token.");
-			return;
-		}
-		if (!incomingVaultId) {
-			new Notice(
-				"YAOS: setup link is missing vault ID. This may create a separate sync room on this device.",
-				8000,
-			);
-		}
+		private async handleSetupLink(params: Record<string, string>): Promise<void> {
+			const host = typeof params.host === "string" ? params.host.trim() : "";
+			const token = typeof params.token === "string" ? params.token.trim() : "";
+			const incomingVaultId = typeof params.vaultId === "string" ? params.vaultId.trim() : "";
+			if (!host || !token) {
+				new Notice("Setup link is missing a host or token.");
+				return;
+			}
+			if (!incomingVaultId) {
+				new Notice(
+					"Setup link is missing the vault ID. This may create a separate sync room on this device.",
+					8000,
+				);
+			}
 
 		const currentVaultId = this.settings.vaultId?.trim() ?? "";
 		if (incomingVaultId && currentVaultId && incomingVaultId !== currentVaultId) {
@@ -2626,12 +2626,12 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 					currentVaultId,
 					incomingVaultId,
 					localMarkdownCount,
-				);
-				if (!confirmed) {
-					new Notice("YAOS: pairing cancelled. Vault ID unchanged.", 6000);
-					return;
+					);
+					if (!confirmed) {
+						new Notice("Pairing cancelled. Vault ID unchanged.", 6000);
+						return;
+					}
 				}
-			}
 		}
 
 		this.settings.host = host.replace(/\/$/, "");
@@ -2640,34 +2640,34 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 			this.settings.vaultId = incomingVaultId;
 		}
 		await this.refreshServerCapabilities();
-		await this.saveSettings();
-		this.excludePatterns = parseExcludePatterns(this.settings.excludePatterns);
-		this.maxFileSize = this.settings.maxFileSizeKB * 1024;
-		this.applyCursorVisibility();
-		new Notice("YAOS: server linked. Starting sync...", 6000);
+			await this.saveSettings();
+			this.excludePatterns = parseExcludePatterns(this.settings.excludePatterns);
+			this.maxFileSize = this.settings.maxFileSizeKB * 1024;
+			this.applyCursorVisibility();
+			new Notice("Server linked. Starting sync...", 6000);
 
 		if (!this.vaultSync) {
 			void this.initSync();
 			return;
 		}
 
-		new Notice("YAOS: settings saved. Reload the plugin to reconnect with the new server.", 8000);
-	}
-
-	private showFatalSyncNotice(): void {
-		const code = this.vaultSync?.fatalAuthCode;
-		if (code === "unclaimed") {
-			new Notice(
-				"YAOS: this server is unclaimed. Open the server URL in a browser, then use the YAOS setup link.",
-				10000,
-			);
-			return;
+			new Notice("Settings saved. Reload the plugin to reconnect with the new server.", 8000);
 		}
 
-		if (code === "server_misconfigured") {
-			new Notice("YAOS: server misconfigured.");
-			return;
-		}
+		private showFatalSyncNotice(): void {
+			const code = this.vaultSync?.fatalAuthCode;
+			if (code === "unclaimed") {
+				new Notice(
+					"This server is unclaimed. Open the server URL in a browser, then use the setup link.",
+					10000,
+				);
+				return;
+			}
+
+			if (code === "server_misconfigured") {
+				new Notice("Server misconfigured.");
+				return;
+			}
 		if (code === "update_required") {
 			const details = this.vaultSync?.fatalAuthDetails;
 			const detailText =
@@ -2682,8 +2682,8 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 			return;
 		}
 
-		new Notice("YAOS: unauthorized — check your token in settings.");
-	}
+			new Notice("Unauthorized. Check your token in settings.");
+		}
 
 	private async saveDiskIndex(): Promise<void> {
 		await this.persistPluginState();
@@ -2945,11 +2945,11 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 			return;
 		}
 
-		const fromVersion = this.vaultSync.storedSchemaVersion;
-		if (fromVersion !== null && fromVersion >= 2) {
-			new Notice("YAOS: this vault is already on schema v2.");
-			return;
-		}
+			const fromVersion = this.vaultSync.storedSchemaVersion;
+			if (fromVersion !== null && fromVersion >= 2) {
+				new Notice("This vault is already on schema v2.");
+				return;
+			}
 
 		new ConfirmModal(
 			this.app,
@@ -2959,11 +2959,11 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 			async () => {
 				if (!this.vaultSync) return;
 
-				try {
-					new Notice("YAOS: exporting pre-migration diagnostics...", 7000);
-					await this.exportDiagnostics();
-				} catch (err) {
-					this.log(`schema migration: preflight diagnostics export failed: ${String(err)}`);
+					try {
+						new Notice("Exporting pre-migration diagnostics...", 7000);
+						await this.exportDiagnostics();
+					} catch (err) {
+						this.log(`schema migration: preflight diagnostics export failed: ${String(err)}`);
 				}
 
 				const result = this.vaultSync.migrateSchemaToV2(this.settings.deviceName);
@@ -2980,11 +2980,11 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 				this.bindAllOpenEditors();
 				this.validateAllOpenBindings("schema-migration");
 
-				try {
-					new Notice("YAOS: exporting post-migration diagnostics...", 7000);
-					await this.exportDiagnostics();
-				} catch (err) {
-					this.log(`schema migration: postflight diagnostics export failed: ${String(err)}`);
+					try {
+						new Notice("Exporting post-migration diagnostics...", 7000);
+						await this.exportDiagnostics();
+					} catch (err) {
+						this.log(`schema migration: postflight diagnostics export failed: ${String(err)}`);
 				}
 
 				new Notice(
@@ -3078,7 +3078,7 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 			}
 		};
 
-		new Notice("YAOS: running VFS torture test...");
+			new Notice("Running filesystem torture test...");
 		this.log(`VFS torture: starting run ${runId} in "${rootDir}"`);
 
 		await runStep("Create sandbox folder structure", async () => {
@@ -3264,10 +3264,10 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 	 * Show a list of available snapshots and let the user pick one to diff/restore.
 	 */
 	private async showSnapshotList(): Promise<void> {
-		if (!this.serverSupportsSnapshots) {
-			new Notice("Snapshots are unavailable until the server has an R2 YAOS_BUCKET binding.");
-			return;
-		}
+			if (!this.serverSupportsSnapshots) {
+				new Notice("Snapshots are unavailable until object storage is configured on the server.");
+				return;
+			}
 
 		new Notice("Loading snapshots...");
 
