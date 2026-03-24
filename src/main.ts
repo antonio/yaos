@@ -359,7 +359,7 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 			this.diskMirror.startMapObservers();
 
 			// 4b. BlobSyncManager (if attachment sync is enabled)
-			await this.startBlobSyncEngine("startup", false);
+			this.startBlobSyncEngine("startup", false);
 
 			// 5. Status tracking
 			this.vaultSync.provider.on("status", () => this.refreshStatusBar());
@@ -2515,7 +2515,7 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 		);
 	}
 
-	private async startBlobSyncEngine(reason: string, runInitialReconcile: boolean): Promise<void> {
+	private startBlobSyncEngine(reason: string, runInitialReconcile: boolean): void {
 		if (this.blobSync) return;
 		if (!this.settings.enableAttachmentSync || !this.serverSupportsAttachments) return;
 
@@ -2581,7 +2581,7 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 	async refreshAttachmentSyncRuntime(reason = "settings-change"): Promise<void> {
 		if (!this.vaultSync) return;
 		if (this.settings.enableAttachmentSync && this.serverSupportsAttachments) {
-			await this.startBlobSyncEngine(reason, true);
+			this.startBlobSyncEngine(reason, true);
 		} else {
 			await this.stopBlobSyncEngine(reason);
 		}
