@@ -222,6 +222,9 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 	/** Persisted blob hash cache: {path -> {mtime, size, hash}}. */
 	private blobHashCache: BlobHashCache = {};
 
+	/** True once we've shown the R2 nudge notice this session. */
+	private shownAttachmentNudge = false;
+
 	/** Persisted blob queue snapshot for crash resilience. */
 	private savedBlobQueue: BlobQueueSnapshot | null = null;
 	private persistedState: PersistedPluginState = {};
@@ -1323,19 +1326,27 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 
 				if (this.isMarkdownPathSyncable(file.path)) {
 					void this.markMarkdownDirty(file, "create");
-				} else if (this.blobSync && this.isBlobPathSyncable(file.path) && !this.blobSync.isSuppressed(file.path)) {
-					// For blob files, use the same stability check before uploading
-					if (this.pendingStabilityChecks.has(file.path)) return;
-					this.pendingStabilityChecks.add(file.path);
+				} else if (this.isBlobPathSyncable(file.path)) {
+					if (this.blobSync && !this.blobSync.isSuppressed(file.path)) {
+						// For blob files, use the same stability check before uploading
+						if (this.pendingStabilityChecks.has(file.path)) return;
+						this.pendingStabilityChecks.add(file.path);
 
-					void waitForDiskQuiet(this.app, file.path).then((stable) => {
-						this.pendingStabilityChecks.delete(file.path);
-						if (stable) {
-							this.blobSync?.handleFileChange(file);
-						} else {
-							this.log(`Create (blob): "${file.path}" unstable after timeout, skipping`);
-						}
-					});
+						void waitForDiskQuiet(this.app, file.path).then((stable) => {
+							this.pendingStabilityChecks.delete(file.path);
+							if (stable) {
+								this.blobSync?.handleFileChange(file);
+							} else {
+								this.log(`Create (blob): "${file.path}" unstable after timeout, skipping`);
+							}
+						});
+					} else if (!this.serverSupportsAttachments && !this.shownAttachmentNudge) {
+						this.shownAttachmentNudge = true;
+						new Notice(
+							"YAOS: This file won't sync yet — attachment sync needs a Cloudflare R2 bucket. Open YAOS settings for a 1-minute setup guide.",
+							10000,
+						);
+					}
 				}
 			}),
 		);
@@ -1393,6 +1404,7 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 		this.editorBindings = null;
 		this.diskMirror = null;
 		this.blobSync = null;
+		this.shownAttachmentNudge = false;
 		this.reconciled = false;
 		this.reconcileInFlight = false;
 		this.reconcilePending = false;

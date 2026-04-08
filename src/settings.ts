@@ -503,10 +503,18 @@ export class VaultSyncSettingTab extends PluginSettingTab {
 		}
 
 				if (this.plugin.settings.host && !attachmentsAvailable) {
-					containerEl.createEl("p", {
-						text: "Attachment sync is unavailable on this server. Add object storage to enable it.",
-						cls: "yaos-settings-attachment-note",
+					const callout = containerEl.createDiv({ cls: "yaos-settings-attachment-callout" });
+					callout.createEl("p", {
+						text: "Images, PDFs, and other attachments are not syncing yet.",
 					});
+					callout.createEl("p", {
+						text: "Add a Cloudflare R2 bucket to enable attachment sync. It takes about a minute.",
+					});
+					const link = callout.createEl("a", {
+						text: "Watch the 1-minute setup video",
+						href: "https://youtu.be/Z7xCMEYfdFM",
+					});
+					link.setAttr("target", "_blank");
 				}
 
 		if (attachmentsAvailable || !this.plugin.settings.host) {
