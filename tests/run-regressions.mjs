@@ -45,6 +45,7 @@ const suites = [
 	[JITI, "tests/frontmatter-quarantine-regressions.mjs"],
 	[NODE, "tests/disk-mirror-regressions.mjs"],
 	[JITI, "tests/disk-mirror-origin-classification.ts"],
+	[JITI, "tests/disk-mirror-sync-scope.ts"],
 	[NODE, "tests/server-pre-auth-trace.mjs"],
 	[JITI, "tests/diagnostics-redaction.mjs"],
 	[JITI, "tests/persistent-trace-logger.ts"],

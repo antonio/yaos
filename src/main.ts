@@ -466,6 +466,7 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 				() => this.settings.deviceName,
 				this.preservedUnresolvedEntries,
 				() => this.persistPreservedUnresolvedState(),
+				(path) => this.isMarkdownPathSyncable(path),
 			);
 			this.diskMirror.startMapObservers();
 			this.diskMirror.setFlightEventHandler((event) => this.recordFlightPathEvent(event as import("./debug/flightEvents").FlightPathEventInput));

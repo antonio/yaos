@@ -133,6 +133,7 @@ export class DiskMirror {
 		private getDeviceName: () => string = () => "unknown-device",
 		initialPreservedUnresolved: PreservedUnresolvedEntry[] = [],
 		private onPreservedUnresolvedChanged?: () => void,
+		private isMarkdownPathSyncable: (path: string) => boolean = () => true,
 	) {
 		this.debug = debug;
 		this.preservedUnresolved = new PreservedUnresolvedRegistry(
@@ -266,6 +267,7 @@ export class DiskMirror {
 	notifyFileOpened(path: string): void {
 		path = normalizePath(path);
 		this.trace?.("disk", "notifyFileOpened", { path });
+		if (this.shouldIgnoreOutOfScopePath(path, "notifyFileOpened")) return;
 		this.openPaths.add(path);
 		if (this.writeQueue.delete(path)) {
 			this.forcedWritePaths.delete(path);
@@ -284,6 +286,7 @@ export class DiskMirror {
 	notifyFileClosed(path: string): void {
 		path = normalizePath(path);
 		this.trace?.("disk", "notifyFileClosed", { path });
+		if (this.shouldIgnoreOutOfScopePath(path, "notifyFileClosed")) return;
 		this.openPaths.delete(path);
 		// Flush any pending debounce for this path
 		const timer = this.debounceTimers.get(path);
@@ -305,6 +308,8 @@ export class DiskMirror {
 	}
 
 	private observeText(path: string): void {
+		path = normalizePath(path);
+		if (this.shouldIgnoreOutOfScopePath(path, "observeText")) return;
 		if (this.textObservers.has(path)) return;
 
 		const ytext = this.vaultSync.getTextForPath(path);
@@ -342,6 +347,7 @@ export class DiskMirror {
 
 	scheduleWrite(path: string): void {
 		path = normalizePath(path);
+		if (this.shouldIgnoreOutOfScopePath(path, "scheduleWrite")) return;
 		if (this.openPaths.has(path)) {
 			this.scheduleOpenWrite(path);
 			return;
@@ -457,6 +463,7 @@ export class DiskMirror {
 
 	async flushWrite(path: string, force = false): Promise<void> {
 		path = normalizePath(path);
+		if (this.shouldIgnoreOutOfScopePath(path, "flushWrite")) return;
 		return this.runPathWriteLocked(path, () => this.flushWriteUnlocked(path, force));
 	}
 
@@ -586,6 +593,7 @@ export class DiskMirror {
 		options: { baselineText?: string | null } = {},
 	): Promise<void> {
 		const normalized = normalizePath(path);
+		if (this.shouldIgnoreOutOfScopePath(normalized, "handleRemoteDelete")) return;
 		const wasOpen = this.openPaths.has(normalized);
 		const wasObserved = this.textObservers.has(normalized);
 		const wasSuppressed = this.isSuppressed(normalized);
@@ -820,6 +828,7 @@ export class DiskMirror {
 		const oldNormalized = normalizePath(oldPath);
 		const newNormalized = normalizePath(newPath);
 		if (oldNormalized === newNormalized) return;
+		if (this.shouldIgnoreOutOfScopeRename(oldNormalized, newNormalized)) return;
 
 		const wasOpen = this.openPaths.delete(oldNormalized);
 		if (wasOpen) {
@@ -989,6 +998,7 @@ export class DiskMirror {
 
 	async flushOpenPath(path: string, reason: string): Promise<void> {
 		path = normalizePath(path);
+		if (this.shouldIgnoreOutOfScopePath(path, `flushOpenPath:${reason}`)) return;
 		const timer = this.openWriteTimers.get(path);
 		const hadTimer = !!timer;
 		if (timer) {
@@ -1149,6 +1159,81 @@ export class DiskMirror {
 		}
 	}
 
+	private isPathInSyncScope(path: string): boolean {
+		return this.isMarkdownPathSyncable(normalizePath(path));
+	}
+
+	private shouldIgnoreOutOfScopePath(path: string, operation: string): boolean {
+		const normalized = normalizePath(path);
+		if (this.isPathInSyncScope(normalized)) return false;
+
+		this.clearMirrorStateForOutOfScopePath(normalized);
+		this.trace?.("disk", "out-of-scope-path-ignored", {
+			path,
+			normalizedPath: normalized,
+			operation,
+		});
+		this.log(`${operation}: ignoring out-of-scope path "${normalized}"`);
+		return true;
+	}
+
+	private shouldIgnoreOutOfScopeRename(oldPath: string, newPath: string): boolean {
+		const oldNormalized = normalizePath(oldPath);
+		const newNormalized = normalizePath(newPath);
+		const oldInScope = this.isPathInSyncScope(oldNormalized);
+		const newInScope = this.isPathInSyncScope(newNormalized);
+		if (oldInScope && newInScope) return false;
+
+		this.clearPendingWriteState(oldNormalized);
+		this.clearPendingWriteState(newNormalized);
+		if (!oldInScope) {
+			this.unobserveText(oldNormalized);
+			this.openPaths.delete(oldNormalized);
+		}
+		if (!newInScope) {
+			this.unobserveText(newNormalized);
+			this.openPaths.delete(newNormalized);
+		}
+		this.trace?.("disk", "out-of-scope-rename-ignored", {
+			oldPath,
+			newPath,
+			oldNormalized,
+			newNormalized,
+			oldInScope,
+			newInScope,
+		});
+		this.log(
+			`handleRemoteRename: ignoring out-of-scope rename "${oldNormalized}" -> "${newNormalized}"`,
+		);
+		return true;
+	}
+
+	private clearMirrorStateForOutOfScopePath(path: string): void {
+		path = normalizePath(path);
+		this.clearPendingWriteState(path);
+		this.unobserveText(path);
+		this.openPaths.delete(path);
+	}
+
+	private clearPendingWriteState(path: string): void {
+		path = normalizePath(path);
+		this.pendingOpenWrites.delete(path);
+		this.writeQueue.delete(path);
+		this.forcedWritePaths.delete(path);
+
+		const pending = this.debounceTimers.get(path);
+		if (pending) {
+			clearTimeout(pending);
+			this.debounceTimers.delete(path);
+		}
+
+		const openPending = this.openWriteTimers.get(path);
+		if (openPending) {
+			clearTimeout(openPending);
+			this.openWriteTimers.delete(path);
+		}
+	}
+
 	private hasRecentEditorActivity(path: string): boolean {
 		const lastEditorActivity = this.editorBindings.getLastEditorActivityForPath(path);
 		if (lastEditorActivity == null) return false;
@@ -1177,6 +1262,7 @@ export class DiskMirror {
 
 	private queueImmediateWrite(path: string, reason: string, force = false): void {
 		path = normalizePath(path);
+		if (this.shouldIgnoreOutOfScopePath(path, `queueImmediateWrite:${reason}`)) return;
 		if (force) {
 			this.forcedWritePaths.add(path);
 		}
